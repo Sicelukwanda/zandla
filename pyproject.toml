@@ -6,19 +6,20 @@ requires-python = ">=3.12, <3.13"
 
 
 dependencies = [
+    "lerobot[feetech]==0.5.1",
     "torch==2.7.0",
     "torchvision",
     "torchaudio",
-    "matplotlib>=3.10.8",
-    "requests>=2.32.5",
-    "huggingface>=0.0.1",
-    "transformers>=5.2.0",
-    "torchtyping>=0.1.5",
-    "hypothesis>=6.151.9",
-    "pytest>=9.0.2",
+    "matplotlib",
+    "requests",
+    "huggingface",
+    "transformers",
+    "torchtyping",
+    "hypothesis",
+    "pytest",
     "chalk-diagrams",
-    "ipython>=9.10.0",
-    "jupyter>=1.1.1",
+    "ipython",
+    "jupyter",
 ]
 
 [build-system]
