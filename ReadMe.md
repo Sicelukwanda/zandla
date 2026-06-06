@@ -1,4 +1,14 @@
+# Zandla - A repo for the so101 LeRobot arm
 
+To get started, install all dependencies with uv:
+`uv sync`
+
+## Controller SDk
+ First clone the controller SDK:
+ `git clone https://github.com/Seeed-Projects/Seeed_RoboController.git`
+
+ and install it in the virtual env:
+ `uv pip install -e .`
 ## Calibration
 
 ### 1. Finding Ports
