@@ -20,6 +20,7 @@ dependencies = [
     "chalk-diagrams",
     "ipython",
     "jupyter",
+    "mujoco>=3.9.0",
 ]
 
 [build-system]
