@@ -21,6 +21,8 @@ dependencies = [
     "ipython",
     "jupyter",
     "mujoco>=3.9.0",
+    "dm_control",
+    "gymnasium",
 ]
 
 [build-system]
