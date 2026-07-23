@@ -25,6 +25,11 @@ dependencies = [
     "gymnasium",
 ]
 
+[project.optional-dependencies]
+pusht = [
+    "gym-pusht",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
