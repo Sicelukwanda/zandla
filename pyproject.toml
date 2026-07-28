@@ -23,6 +23,8 @@ dependencies = [
     "mujoco>=3.9.0",
     "dm_control",
     "gymnasium",
+    "sentence-transformers>=5.6.1",
+    "imageio-ffmpeg>=0.6.0",
 ]
 
 [project.optional-dependencies]
