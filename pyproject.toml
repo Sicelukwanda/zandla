@@ -25,6 +25,7 @@ dependencies = [
     "gymnasium",
     "sentence-transformers>=5.6.1",
     "imageio-ffmpeg>=0.6.0",
+    "pymunk<7.0.0",
 ]
 
 [project.optional-dependencies]
