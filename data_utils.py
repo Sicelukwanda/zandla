@@ -177,7 +177,7 @@ class EpisodicDataset(Dataset):
                 if txt:
                     instruction = txt
 
-        # 4. Generate sentence embedding using SentenceTransformer inside __getitem__
+        # 4. Generate sentence embedding using SentenceTransformer
         model = get_sentence_transformer_model('all-mpnet-base-v2')
         raw_embedding = model.encode(instruction)
         instr_embedding = torch.from_numpy(raw_embedding).float()
@@ -187,6 +187,7 @@ class EpisodicDataset(Dataset):
             instr_std = torch.as_tensor(self.instr_stats["std"], dtype=torch.float32)
             instr_embedding = (instr_embedding - instr_mean) / instr_std
 
+        # task_id = 0 is arbitrary. For multi-task datasets, this would vary depending on task variant.
         task_id = 0
         return image_data, qpos_data, action_data, is_pad_data, task_id, instr_embedding
 
@@ -349,15 +350,6 @@ def load_data(
 
 
 ### Helper functions
-
-def sample_embeddings(task_id, df_task, return_instruction=False):
-    """Legacy helper function for instruction embeddings DataFrame sampling."""
-    import ast
-    example = df_task[df_task['task_id'] == task_id].sample().iloc[0]
-    if return_instruction:
-        return torch.tensor(ast.literal_eval(example['embedding'])), example['instruction']
-    return torch.tensor(ast.literal_eval(example['embedding']))
-
 
 def compute_dict_mean(epoch_dicts):
     result = {k: None for k in epoch_dicts[0]}
