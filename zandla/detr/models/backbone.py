@@ -12,7 +12,7 @@ from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 
 # from util.misc import NestedTensor, is_main_process
-from detr.util.misc import NestedTensor, is_main_process
+from zandla.detr.util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
 

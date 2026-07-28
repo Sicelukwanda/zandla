@@ -33,7 +33,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, instr_embed_dim=768):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, env_state_dim=7, instr_embed_dim=768):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -55,27 +55,29 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
-            # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
-            self.input_proj_env_state = nn.Linear(7, hidden_dim)
-            self.pos = torch.nn.Embedding(2, hidden_dim)
+            # State-only mode: expects robot_state (qpos) + env_state
+            self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
+            self.input_proj_env_state = nn.Linear(env_state_dim, hidden_dim)
+            num_state_tokens = 2  # token 0: robot_state, token 1: env_state
+            self.pos = torch.nn.Embedding(num_state_tokens, hidden_dim)
             self.backbones = None
 
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
 
-        # Added additional position embedding
-        self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio and latent
+        # Added additional position embedding for auxiliary tokens (proprio, latent VAE sample, language instruction)
+        num_aux_tokens = 3
+        self.additional_pos_embed = nn.Embedding(num_aux_tokens, hidden_dim)
 
         # Added linear layer for projecting instruction embedding to hidden dim
         self.instr_embedding_proj = nn.Linear(instr_embed_dim, hidden_dim)
@@ -170,7 +172,8 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = getattr(args, 'state_dim', 14)
+    env_state_dim = getattr(args, 'env_state_dim', 7)
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -190,6 +193,7 @@ def build(args):
         state_dim=state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
+        env_state_dim=env_state_dim,
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
