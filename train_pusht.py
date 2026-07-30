@@ -36,13 +36,16 @@ def parse_pusht_args():
         conflict_handler="resolve",
     )
 
-    # PushT Specific Defaults
+    # PushT Specific Defaults (Optimized for Threadripper CPU + RTX 3080 GPU)
     parser.set_defaults(
         dataset_dir="data/pusht_simplified",
         ckpt_dir="checkpoints/pusht",
         state_dim=2,
         env_state_dim=3,
         num_queries=100,
+        batch_size=64,
+        batch_size_val=64,
+        num_workers=8,
         camera_names=["observation.image"],
     )
 
@@ -51,7 +54,7 @@ def parse_pusht_args():
     parser.add_argument("--eval_frequency", type=int, default=10, help="Epoch interval between evaluation rollouts")
     parser.add_argument("--num_eval_episodes", type=int, default=3, help="Number of rollout episodes during evaluation")
     parser.add_argument("--eval_max_timesteps", type=int, default=300, help="Maximum timesteps per rollout episode")
-    parser.add_argument("--query_frequency", type=int, default=50, help="Number of steps to execute per policy query")
+    parser.add_argument("--query_frequency", type=int, default=16, help="Number of steps to execute per policy query")
     parser.add_argument("--videos_dir", type=str, default="videos/pusht", help="Directory to save evaluation rollout videos")
     parser.add_argument("--instruction_text", type=str, default="Push the T-shaped block to the target area.", help="Language conditioning prompt")
 

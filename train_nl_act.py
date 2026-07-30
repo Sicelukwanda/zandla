@@ -37,10 +37,11 @@ def get_args_parser():
 
     # Training Parameters
     parser.add_argument("--num_epochs", type=int, default=100, help="Total number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training")
-    parser.add_argument("--batch_size_val", type=int, default=8, help="Batch size for validation")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training")
+    parser.add_argument("--batch_size_val", type=int, default=64, help="Batch size for validation")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for transformer")
     parser.add_argument("--lr_backbone", type=float, default=1e-5, help="Learning rate for CNN backbone")
+    parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Freeze vision backbone weights (requires_grad=False)")
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay for AdamW optimizer")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for training reproducibility")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda/cpu)")
@@ -56,7 +57,8 @@ def get_args_parser():
     parser.add_argument("--dec_layers", type=int, default=7, help="Number of transformer decoder layers")
     parser.add_argument("--nheads", type=int, default=8, help="Number of multi-head attention heads")
     parser.add_argument("--state_dim", type=int, default=None, help="Robot state/qpos dimension (auto-detected if None)")
-    parser.add_argument("--env_state_dim", type=int, default=7, help="Environment ground-truth state dimension (for state-only mode)")
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of DataLoader worker processes")
+    parser.add_argument("--use_amp", action="store_true", default=torch.cuda.is_available(), help="Enable Automatic Mixed Precision (AMP)")
 
     # Weights & Biases Logging
     parser.add_argument("--wandb", action="store_true", default=False, help="Enable Weights & Biases logging")
@@ -124,6 +126,10 @@ def train_nl_act(args, eval_fn=None):
             config=vars(args),
         )
 
+    # Enable cuDNN benchmark for optimized CUDA convolution algorithms
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
     # Load dataset using data_utils.py
     print(f"\n[Dataset] Loading dataset from: {args.dataset_dir}")
     train_dataloader, val_dataloader, norm_stats, instr_stats = load_data(
@@ -131,6 +137,7 @@ def train_nl_act(args, eval_fn=None):
         batch_size_train=args.batch_size,
         batch_size_val=args.batch_size_val,
         camera_names=args.camera_names,
+        num_workers=args.num_workers,
     )
 
     # Infer state_dim if not explicitly specified
@@ -145,6 +152,7 @@ def train_nl_act(args, eval_fn=None):
     policy_config = {
         "lr": args.lr,
         "lr_backbone": args.lr_backbone,
+        "freeze_backbone": getattr(args, "freeze_backbone", False),
         "weight_decay": args.weight_decay,
         "backbone": args.backbone,
         "kl_weight": args.kl_weight,
@@ -152,7 +160,7 @@ def train_nl_act(args, eval_fn=None):
         "hidden_dim": args.hidden_dim,
         "dim_feedforward": args.dim_feedforward,
         "state_dim": args.state_dim,
-        "env_state_dim": args.env_state_dim,
+        "env_state_dim": getattr(args, "env_state_dim", 7),
         "enc_layers": args.enc_layers,
         "dec_layers": args.dec_layers,
         "nheads": args.nheads,
@@ -171,6 +179,7 @@ def train_nl_act(args, eval_fn=None):
     policy.to(device)
 
     optimizer = policy.configure_optimizers()
+    scaler = torch.cuda.amp.GradScaler(enabled=args.use_amp and device.type == "cuda")
 
     start_epoch = 0
     best_val_loss = float("inf")
@@ -181,7 +190,7 @@ def train_nl_act(args, eval_fn=None):
         start_epoch = checkpoint.get("epoch", 0) + 1
         best_val_loss = checkpoint.get("val_loss", float("inf"))
 
-    print(f"[Training] Starting training on {device} for {args.num_epochs} epochs...\n")
+    print(f"[Training] Starting training on {device} (AMP={args.use_amp}, Workers={args.num_workers}) for {args.num_epochs} epochs...\n")
 
     start_time = time.time()
     epoch_times = []
@@ -204,20 +213,23 @@ def train_nl_act(args, eval_fn=None):
 
         train_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}/{args.num_epochs} [Train]", leave=False, dynamic_ncols=True)
         for images, qpos, actions, is_pad, _, instr_emb in train_pbar:
-            images = images.to(device)
-            qpos = qpos.to(device)
-            actions = actions.to(device)
-            is_pad = is_pad.to(device)
-            instr_emb = instr_emb.to(device)
+            images = images.to(device, non_blocking=True)
+            qpos = qpos.to(device, non_blocking=True)
+            actions = actions.to(device, non_blocking=True)
+            is_pad = is_pad.to(device, non_blocking=True)
+            instr_emb = instr_emb.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-            loss_dict = policy(qpos, images, actions, is_pad, instr_embedding=instr_emb)
-            loss = loss_dict["loss"]
+            with torch.cuda.amp.autocast(enabled=args.use_amp and device.type == "cuda"):
+                loss_dict = policy(qpos, images, actions, is_pad, instr_embedding=instr_emb)
+                loss = loss_dict["loss"]
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             latest_grad_norm = compute_gradient_norm(policy)
             torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=10.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             batch_loss = loss.item()
             batch_l1 = loss_dict["l1"].item()
@@ -251,13 +263,14 @@ def train_nl_act(args, eval_fn=None):
         with torch.no_grad():
             val_pbar = tqdm(val_dataloader, desc=f"Epoch {epoch + 1}/{args.num_epochs} [Val]", leave=False, dynamic_ncols=True)
             for images, qpos, actions, is_pad, _, instr_emb in val_pbar:
-                images = images.to(device)
-                qpos = qpos.to(device)
-                actions = actions.to(device)
-                is_pad = is_pad.to(device)
-                instr_emb = instr_emb.to(device)
+                images = images.to(device, non_blocking=True)
+                qpos = qpos.to(device, non_blocking=True)
+                actions = actions.to(device, non_blocking=True)
+                is_pad = is_pad.to(device, non_blocking=True)
+                instr_emb = instr_emb.to(device, non_blocking=True)
 
-                loss_dict = policy(qpos, images, actions, is_pad, instr_embedding=instr_emb)
+                with torch.cuda.amp.autocast(enabled=args.use_amp and device.type == "cuda"):
+                    loss_dict = policy(qpos, images, actions, is_pad, instr_embedding=instr_emb)
                 val_loss_sum += loss_dict["loss"].item()
                 val_l1_sum += loss_dict["l1"].item()
                 val_kl_sum += loss_dict["kl"].item()
