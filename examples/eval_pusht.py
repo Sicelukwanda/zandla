@@ -193,7 +193,7 @@ def run_evaluation(args):
                 qpos_norm = (qpos_raw - qpos_mean) / qpos_std
                 qpos_tensor = torch.from_numpy(qpos_norm).float().unsqueeze(0).to(device)
 
-                # Preprocess image (680, 680, 3) -> (1, 1, 3, 96, 96) in [0, 1]
+                # Preprocess image (680, 680, 3) -> (1, 1, 3, 96, 96) in [0, 1] # to match dataset input dimensions
                 curr_frame = rendered_img
                 frame_tensor = torch.from_numpy(curr_frame).permute(2, 0, 1).float() / 255.0
                 frame_tensor = F.interpolate(frame_tensor.unsqueeze(0), size=(96, 96), mode="bicubic", align_corners=False)
