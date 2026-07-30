@@ -8,6 +8,8 @@ This directory contains standalone example scripts for converting datasets, trai
 
 The **PushT** benchmark requires a 2D planar robot agent (represented as a circular end-effector) to push a T-shaped block into a target zone.
 
+![PushT Closed-Loop Evaluation Rollout](../media/pusht_epoch_11000_eval_ep_1.gif)
+
 ### Environment Specification
 * **Agent Position (`qpos` / `state`)**: 2D continuous coordinates $(x, y)$ representing the agent's end-effector position.
 * **Environment State (`env_state`)**: 5D state vector containing:
