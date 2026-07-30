@@ -74,6 +74,7 @@ def build_ACT_model_and_optimizer(args_override):
             "lr": args.lr_backbone,
         },
     ]
+    param_dicts = [p for p in param_dicts if p["params"]]
     optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
                                   weight_decay=args.weight_decay)
 
