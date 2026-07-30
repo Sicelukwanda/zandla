@@ -2,3 +2,12 @@ data
 
 # pycache
 __pycache__
+
+# checkpoint files
+checkpoints/
+
+# videos
+videos/
+
+# wandb
+wandb/
