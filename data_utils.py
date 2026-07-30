@@ -50,7 +50,7 @@ class EpisodicDataset(Dataset):
         dataset_dir,
         camera_names=None,
         norm_stats=None,
-        df_instr=None,
+        default_instruction="Perform the task.",
         instr_stats=None,
         max_len=300,
     ):
@@ -59,14 +59,15 @@ class EpisodicDataset(Dataset):
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names if camera_names is not None else ["camera_wrist"]
         self.norm_stats = norm_stats
-        self.df_embeddings = df_instr
         self.instr_stats = instr_stats
         self.max_len = max_len
         self.is_sim = True
 
         self._instr_cache = {}
 
-        # Read dataset_info.json if available to extract maximum episode length and cumulative lengths
+        # Read dataset_info.json if available to extract extract maximum episode length, cumulative lengths and default instruction
+        self._default_instr = default_instruction
+
         self.episode_lengths = None
         self.cum_lens = None
         info_path = os.path.join(dataset_dir, "dataset_info.json")
@@ -78,10 +79,14 @@ class EpisodicDataset(Dataset):
                     self.episode_lengths = info["episode_lengths"]
                     self.cum_lens = np.cumsum([0] + self.episode_lengths)
                     self.max_len = max(max(self.episode_lengths), self.max_len)
+                if default_instruction is None:
+                    if info.get("default_instruction"):
+                        self._default_instr = info["default_instruction"]
+                    elif info.get("instruction"):
+                        self._default_instr = info["instruction"]
             except Exception:
                 pass
         # Pre-compute default instruction embedding
-        self._default_instr = "Push the T-shaped block to the target area."
         self._default_instr_emb = torch.from_numpy(get_sentence_transformer_model('all-mpnet-base-v2').encode(self._default_instr)).float()
 
     def _get_cached_video_frames(self, video_path):
@@ -218,9 +223,9 @@ class EpisodicDataset(Dataset):
             action_data = (action_data - action_mean) / action_std
             qpos_data = (qpos_data - qpos_mean) / qpos_std
 
-        # 3. Load text prompt instruction from instruction.txt
+        # 3. Load text prompt instruction from instruction.txt (fallback to self._default_instr)
         instruction_path = os.path.join(ep_path, "instruction.txt")
-        instruction = "Push the T-shaped block to the target area."
+        instruction = self._default_instr
         if os.path.exists(instruction_path):
             with open(instruction_path, "r", encoding="utf-8") as f:
                 txt = f.read().strip()
@@ -366,6 +371,7 @@ def load_data(
     train_instr_path=None,
     val_instr_path=None,
     camera_names=None,
+    default_instruction=None,
     num_workers=8,
 ):
     """
@@ -412,13 +418,19 @@ def load_data(
 
     if unique_mp4_files:
         print(f"[Dataset] Pre-loading video streams into system RAM cache...")
-        dummy_ds = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
+        dummy_ds = EpisodicDataset(
+            train_indices, dataset_dir, camera_names, norm_stats, default_instruction=default_instruction, instr_stats=instr_stats
+        )
         for video_path in sorted(list(unique_mp4_files)):
             dummy_ds._get_cached_video_frames(video_path)
         print(f"[Dataset] Video preloading complete! Cached {len(_GLOBAL_VIDEO_SIZE_CACHE)} unique video stream(s).")
 
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
+    train_dataset = EpisodicDataset(
+        train_indices, dataset_dir, camera_names, norm_stats, default_instruction=default_instruction, instr_stats=instr_stats
+    )
+    val_dataset = EpisodicDataset(
+        val_indices, dataset_dir, camera_names, norm_stats, default_instruction=default_instruction, instr_stats=instr_stats
+    )
 
     persistent_workers = num_workers > 0
     prefetch_factor = 2 if num_workers > 0 else None
