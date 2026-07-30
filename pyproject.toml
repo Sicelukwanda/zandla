@@ -23,6 +23,14 @@ dependencies = [
     "mujoco>=3.9.0",
     "dm_control",
     "gymnasium",
+    "sentence-transformers>=5.6.1",
+    "imageio-ffmpeg>=0.6.0",
+    "pymunk<7.0.0",
+]
+
+[project.optional-dependencies]
+pusht = [
+    "gym-pusht",
 ]
 
 [build-system]
@@ -30,6 +38,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
+override-dependencies = [
+    "torchcodec ; sys_platform == 'never'",
+]
+
 
 [tool.uv.sources]
 chalk-diagrams = { git = "https://github.com/chalk-diagrams/chalk" }

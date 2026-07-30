@@ -24,7 +24,7 @@ class PushCubeTask(control.Task):
             dtype=np.float64,
             minimum=ctrlrange[:, 0],
             maximum=ctrlrange[:, 1],
-            name="action"
+            name="action",
         )
 
     def before_step(self, action, physics):
@@ -98,6 +98,7 @@ class PushCubeTask(control.Task):
 
 class PushCubeGymEnv(gym.Env):
     """Gymnasium Wrapper around the custom dm_control PushCube environment."""
+
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
     def __init__(self, render_mode=None):
@@ -107,7 +108,10 @@ class PushCubeGymEnv(gym.Env):
         # Define path to the MuJoCo scene XML
         xml_path = os.path.join(
             os.path.dirname(__file__),
-            "../", "robot_models", "SO101", "scene_push_cube.xml"
+            "../",
+            "robot_models",
+            "SO101",
+            "scene_push_cube.xml",
         )
         if not os.path.exists(xml_path):
             raise FileNotFoundError(f"Scene XML not found at {xml_path}")
@@ -122,7 +126,7 @@ class PushCubeGymEnv(gym.Env):
             physics=self.physics,
             task=self.task,
             time_limit=10.0,  # 10 second time limit per episode (250 steps)
-            control_timestep=0.04
+            control_timestep=0.04,
         )
 
         # Get control range from physics model for action space
@@ -130,19 +134,40 @@ class PushCubeGymEnv(gym.Env):
         self.action_space = spaces.Box(
             low=ctrl_range[:, 0].astype(np.float32),
             high=ctrl_range[:, 1].astype(np.float32),
-            dtype=np.float32
+            dtype=np.float32,
         )
 
+        # Define target location variables
+        self.left_target = [0.2, 0.1, 0.0001]
+        self.right_target = [0.2, -0.1, 0.0001]
+
+        # Define end-effector rest position
+        self.ee_rest = np.array([0.0, 0.5, 1.0, 0.5, 0.0, 0.5], dtype=np.float32)
+
         # Define Gym observation space with dict containing state and text instructions
-        self.observation_space = spaces.Dict({
-            "joint_positions": spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32),
-            "joint_velocities": spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32),
-            "cube_position": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
-            "cube_orientation": spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32),
-            "target_green_position": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
-            "target_blue_position": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
-            "instruction": spaces.Text(max_length=100)
-        })
+        self.observation_space = spaces.Dict(
+            {
+                "joint_positions": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32
+                ),
+                "joint_velocities": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32
+                ),
+                "cube_position": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+                "cube_orientation": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32
+                ),
+                "target_green_position": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+                "target_blue_position": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+                "instruction": spaces.Text(max_length=100),
+            }
+        )
 
         self._viewer = None
 
@@ -153,8 +178,12 @@ class PushCubeGymEnv(gym.Env):
             "joint_velocities": np.array(dmc_obs["joint_velocities"], dtype=np.float32),
             "cube_position": np.array(dmc_obs["cube_position"], dtype=np.float32),
             "cube_orientation": np.array(dmc_obs["cube_orientation"], dtype=np.float32),
-            "target_green_position": np.array(dmc_obs["target_green_position"], dtype=np.float32),
-            "target_blue_position": np.array(dmc_obs["target_blue_position"], dtype=np.float32),
+            "target_green_position": np.array(
+                dmc_obs["target_green_position"], dtype=np.float32
+            ),
+            "target_blue_position": np.array(
+                dmc_obs["target_blue_position"], dtype=np.float32
+            ),
         }
 
     def reset(self, seed=None, options=None):
@@ -180,15 +209,38 @@ class PushCubeGymEnv(gym.Env):
         # Reset dm_control env
         timestep = self.dmc_env.reset()
 
-        # Build observations
-        obs = self._get_obs(timestep.observation)
-        instruction_str = f"push the red cube to the {self.task.current_goal} target"
-        obs["instruction"] = instruction_str
+        # Swap target area color if specified
+        if options is not None and options.get("swap_target_colors", False):
+            target_green_id = self.physics.model.name2id("target_green", "geom")
+            target_blue_id = self.physics.model.name2id("target_blue", "geom")
+            # Swap target positions: green -> -0.1 (right), blue -> +0.1 (left)
+            self.physics.model.geom_pos[target_green_id] = self.right_target
+            self.physics.model.geom_pos[target_blue_id] = self.left_target
 
-        info = {
-            "instruction": instruction_str,
-            "goal": self.task.current_goal
-        }
+        # Set cube inital location if specified
+        if options is not None and (
+            "init_cube_pos" in options or "cube_position" in options
+        ):
+            cube_pos = options.get("init_cube_pos", options.get("cube_position"))
+            self.physics.data.qpos[6:9] = np.asarray(cube_pos, dtype=np.float32)
+
+        # Forward physics so data arrays and derived quantities update
+        self.physics.forward()
+
+        # obs = self._get_obs(timestep.observation)
+        # update observations with given cube position
+        obs = self._get_obs(self.task.get_observation(self.physics))
+
+        # use instruction from the generator, else default
+        if options is not None and "instruction" in options:
+            instruction_str = options["instruction"]
+        else:
+            instruction_str = (
+                f"push the red cube to the {self.task.current_goal} target"
+            )
+
+        obs["instruction"] = instruction_str
+        info = {"instruction": instruction_str, "goal": self.task.current_goal}
 
         if self.render_mode == "human":
             self.render()
@@ -212,7 +264,9 @@ class PushCubeGymEnv(gym.Env):
 
         # Check success condition (cube center within 5 cm of target center)
         cube_pos = obs["cube_position"]
-        target_name = "target_green" if self.task.current_goal == "green" else "target_blue"
+        target_name = (
+            "target_green" if self.task.current_goal == "green" else "target_blue"
+        )
         target_pos = obs[f"{target_name}_position"]
         dist_cube_target = np.linalg.norm(cube_pos - target_pos)
         success = dist_cube_target < 0.05
@@ -224,7 +278,7 @@ class PushCubeGymEnv(gym.Env):
             "instruction": instruction_str,
             "goal": self.task.current_goal,
             "success": success,
-            "dist_cube_target": dist_cube_target
+            "dist_cube_target": dist_cube_target,
         }
 
         if self.render_mode == "human":
@@ -238,8 +292,7 @@ class PushCubeGymEnv(gym.Env):
             if self._viewer is None:
                 # Open the MuJoCo viewer with the underlying raw model and data pointers
                 self._viewer = mujoco.viewer.launch_passive(
-                    self.physics.model.ptr,
-                    self.physics.data.ptr
+                    self.physics.model.ptr, self.physics.data.ptr
                 )
             self._viewer.sync()
         elif self.render_mode == "rgb_array":
