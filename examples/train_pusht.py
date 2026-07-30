@@ -4,7 +4,7 @@ train_pusht.py: Script to train an ACT policy on the PushT task and evaluate pol
 in the Gym-PushT environment.
 
 Usage example:
-    uv run python train_pusht.py --num_epochs 10 --batch_size 8 --eval --eval_frequency 5
+    uv run python examples/train_pusht.py --num_epochs 10 --batch_size 8 --eval --eval_frequency 5
 
 Features:
 - Extends train_nl_act.py for PushT environment setup and training
@@ -13,6 +13,7 @@ Features:
 """
 
 import os
+import sys
 import argparse
 from pathlib import Path
 import numpy as np
@@ -21,6 +22,9 @@ import torch.nn.functional as F
 import imageio
 from tqdm import tqdm
 import wandb
+
+# Resolve repository root directory for imports when executed from examples/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gym_pusht
 import gymnasium as gym
