@@ -11,6 +11,10 @@ from sentence_transformers import SentenceTransformer
 # Global cache for SentenceTransformer model to avoid repeated instantiations across workers
 _SENTENCE_MODEL_CACHE = None
 
+# Global cache for video frames across workers to avoid repeated disk reads and ffmpeg decoding
+_GLOBAL_VIDEO_FRAMES_CACHE = {}
+_GLOBAL_VIDEO_SIZE_CACHE = {}
+
 def get_sentence_transformer_model(model_name='all-mpnet-base-v2'):
     """
     Returns a cached CPU instance of SentenceTransformer to avoid re-instantiating
@@ -60,16 +64,50 @@ class EpisodicDataset(Dataset):
         self.max_len = max_len
         self.is_sim = True
 
-        # Read dataset_info.json if available to extract maximum episode length
+        self._instr_cache = {}
+
+        # Read dataset_info.json if available to extract maximum episode length and cumulative lengths
+        self.episode_lengths = None
+        self.cum_lens = None
         info_path = os.path.join(dataset_dir, "dataset_info.json")
         if os.path.exists(info_path):
             try:
                 with open(info_path, "r", encoding="utf-8") as f:
                     info = json.load(f)
                 if "episode_lengths" in info and info["episode_lengths"]:
-                    self.max_len = max(max(info["episode_lengths"]), self.max_len)
+                    self.episode_lengths = info["episode_lengths"]
+                    self.cum_lens = np.cumsum([0] + self.episode_lengths)
+                    self.max_len = max(max(self.episode_lengths), self.max_len)
             except Exception:
                 pass
+        # Pre-compute default instruction embedding
+        self._default_instr = "Push the T-shaped block to the target area."
+        self._default_instr_emb = torch.from_numpy(get_sentence_transformer_model('all-mpnet-base-v2').encode(self._default_instr)).float()
+
+    def _get_cached_video_frames(self, video_path):
+        global _GLOBAL_VIDEO_FRAMES_CACHE, _GLOBAL_VIDEO_SIZE_CACHE
+        if video_path not in _GLOBAL_VIDEO_FRAMES_CACHE:
+            try:
+                sz = os.path.getsize(video_path)
+                cache_key = (sz, os.path.basename(video_path))
+                if cache_key in _GLOBAL_VIDEO_SIZE_CACHE:
+                    _GLOBAL_VIDEO_FRAMES_CACHE[video_path] = _GLOBAL_VIDEO_SIZE_CACHE[cache_key]
+                else:
+                    frames = self.load_mp4_to_frames(video_path)
+                    _GLOBAL_VIDEO_SIZE_CACHE[cache_key] = frames
+                    _GLOBAL_VIDEO_FRAMES_CACHE[video_path] = frames
+            except Exception:
+                _GLOBAL_VIDEO_FRAMES_CACHE[video_path] = self.load_mp4_to_frames(video_path)
+        return _GLOBAL_VIDEO_FRAMES_CACHE[video_path]
+
+    def _get_cached_instr_embedding(self, instruction):
+        if instruction == self._default_instr:
+            return self._default_instr_emb.clone()
+        if instruction not in self._instr_cache:
+            model = get_sentence_transformer_model('all-mpnet-base-v2')
+            raw_embedding = model.encode(instruction)
+            self._instr_cache[instruction] = torch.from_numpy(raw_embedding).float()
+        return self._instr_cache[instruction].clone()
 
     def __len__(self):
         return len(self.episode_ids)
@@ -77,17 +115,23 @@ class EpisodicDataset(Dataset):
     def __getitem__(self, index):
         sample_full_episode = False  # hardcode full episode sampling flag
 
-        episode_id = self.episode_ids[index]
+        raw_ep_id = self.episode_ids[index]
 
         # Handle episode folder indexing (support 0, '178', episode_0000, or episode_0)
-        if isinstance(episode_id, (int, np.integer)) or (isinstance(episode_id, str) and episode_id.isdigit()):
-            ep_num = int(episode_id)
+        if isinstance(raw_ep_id, (int, np.integer)) or (isinstance(raw_ep_id, str) and raw_ep_id.isdigit()):
+            ep_num = int(raw_ep_id)
             ep_folder = f"episode_{ep_num:04d}"
             if not os.path.exists(os.path.join(self.dataset_dir, ep_folder)):
                 ep_folder = f"episode_{ep_num}"
         else:
-            ep_folder = str(episode_id)
-            if not ep_folder.startswith("episode_"):
+            ep_folder = str(raw_ep_id)
+            if ep_folder.startswith("episode_"):
+                try:
+                    ep_num = int(ep_folder.split("_")[1])
+                except ValueError:
+                    ep_num = index
+            else:
+                ep_num = index
                 ep_folder = f"episode_{ep_folder}"
 
         ep_path = os.path.join(self.dataset_dir, ep_folder)
@@ -138,9 +182,15 @@ class EpisodicDataset(Dataset):
                 if mp4_files:
                     video_path = mp4_files[0]
 
-            frames = self.load_mp4_to_frames(video_path)
+            frames = self._get_cached_video_frames(video_path)
             if frames:
-                frame_idx = min(start_ts, len(frames) - 1)
+                # Check if video contains full dataset stream (concatenated across episodes)
+                if self.cum_lens is not None and len(frames) >= self.cum_lens[-1]:
+                    # Map to global frame offset for ep_num
+                    global_frame_idx = self.cum_lens[ep_num] + start_ts
+                    frame_idx = min(global_frame_idx, len(frames) - 1)
+                else:
+                    frame_idx = min(start_ts, len(frames) - 1)
                 frame = frames[frame_idx]
             else:
                 # Fallback zero frame if video loading fails
@@ -177,10 +227,8 @@ class EpisodicDataset(Dataset):
                 if txt:
                     instruction = txt
 
-        # 4. Generate sentence embedding using SentenceTransformer
-        model = get_sentence_transformer_model('all-mpnet-base-v2')
-        raw_embedding = model.encode(instruction)
-        instr_embedding = torch.from_numpy(raw_embedding).float()
+        # 4. Generate cached sentence embedding using SentenceTransformer
+        instr_embedding = self._get_cached_instr_embedding(instruction)
 
         if self.instr_stats is not None and "mean" in self.instr_stats and "std" in self.instr_stats:
             instr_mean = torch.as_tensor(self.instr_stats["mean"], dtype=torch.float32)
@@ -214,9 +262,10 @@ class EpisodicDataset(Dataset):
         """Loads an MP4 video and returns a list of numpy frames."""
         try:
             try:
-                frames = list(imageio.imiter(mp4_path, plugin="ffmpeg"))
+                import imageio.v2 as iio
+                frames = list(iio.mimread(mp4_path, memtest=False))
             except Exception:
-                frames = list(imageio.imiter(mp4_path, plugin="FFMPEG"))
+                frames = list(imageio.imiter(mp4_path, plugin="ffmpeg"))
             return [np.array(frame) for frame in frames]
         except Exception as e:
             print(f"Error loading video frames from {mp4_path}: {e}")
@@ -253,22 +302,27 @@ def get_norm_stats(dataset_dir, num_episodes=None):
     if os.path.exists(info_path):
         with open(info_path, "r", encoding="utf-8") as f:
             info = json.load(f)
-        if "stats" in info and "action" in info["stats"] and ("state" in info["stats"] or "qpos" in info["stats"]):
-            st_key = "state" if "state" in info["stats"] else "qpos"
-            action_mean = np.array(info["stats"]["action"]["mean"], dtype=np.float32)
-            action_std = np.array(info["stats"]["action"]["std"], dtype=np.float32)
-            qpos_mean = np.array(info["stats"][st_key]["mean"], dtype=np.float32)
-            qpos_std = np.array(info["stats"][st_key]["std"], dtype=np.float32)
+        if "stats" in info and "action" in info["stats"]:
+            st_key = None
+            for key in ["observation.state", "state", "qpos"]:
+                if key in info["stats"]:
+                    st_key = key
+                    break
+            if st_key is not None:
+                action_mean = np.array(info["stats"]["action"]["mean"], dtype=np.float32)
+                action_std = np.array(info["stats"]["action"]["std"], dtype=np.float32)
+                qpos_mean = np.array(info["stats"][st_key]["mean"], dtype=np.float32)
+                qpos_std = np.array(info["stats"][st_key]["std"], dtype=np.float32)
 
-            action_std = np.clip(action_std, 1e-2, np.inf)
-            qpos_std = np.clip(qpos_std, 1e-2, np.inf)
+                action_std = np.clip(action_std, 1e-2, np.inf)
+                qpos_std = np.clip(qpos_std, 1e-2, np.inf)
 
-            return {
-                "action_mean": action_mean,
-                "action_std": action_std,
-                "qpos_mean": qpos_mean,
-                "qpos_std": qpos_std,
-            }
+                return {
+                    "action_mean": action_mean,
+                    "action_std": action_std,
+                    "qpos_mean": qpos_mean,
+                    "qpos_std": qpos_std,
+                }
 
     # Fallback: compute statistics manually from trajectory.npz files
     ep_dirs = sorted([d for d in os.listdir(dataset_dir) if d.startswith("episode_") and os.path.isdir(os.path.join(dataset_dir, d))])
@@ -312,6 +366,7 @@ def load_data(
     train_instr_path=None,
     val_instr_path=None,
     camera_names=None,
+    num_workers=8,
 ):
     """
     Constructs train and validation DataLoaders for the flat episode dataset structure.
@@ -340,11 +395,52 @@ def load_data(
         "std": torch.ones(768, dtype=torch.float32),
     }
 
+    # Pre-load video frames into global memory cache
+    unique_mp4_files = set()
+    for ep_dir in ep_dirs:
+        ep_path = os.path.join(dataset_dir, ep_dir)
+        for cam_name in camera_names:
+            video_path = os.path.join(ep_path, f"{cam_name}.mp4")
+            if not os.path.exists(video_path):
+                video_path = os.path.join(ep_path, f"{cam_name.replace('.', '_')}.mp4")
+            if not os.path.exists(video_path):
+                mp4_files = glob.glob(os.path.join(ep_path, "*.mp4"))
+                if mp4_files:
+                    video_path = mp4_files[0]
+            if os.path.exists(video_path):
+                unique_mp4_files.add(video_path)
+
+    if unique_mp4_files:
+        print(f"[Dataset] Pre-loading video streams into system RAM cache...")
+        dummy_ds = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
+        for video_path in sorted(list(unique_mp4_files)):
+            dummy_ds._get_cached_video_frames(video_path)
+        print(f"[Dataset] Video preloading complete! Cached {len(_GLOBAL_VIDEO_SIZE_CACHE)} unique video stream(s).")
+
     train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
     val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, instr_stats=instr_stats)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
+    persistent_workers = num_workers > 0
+    prefetch_factor = 2 if num_workers > 0 else None
+
+    train_dataloader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size_train, 
+        shuffle=True, 
+        pin_memory=True, 
+        num_workers=num_workers, 
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor
+    )
+    val_dataloader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size_val, 
+        shuffle=True, 
+        pin_memory=True, 
+        num_workers=num_workers, 
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor
+    )
 
     return train_dataloader, val_dataloader, norm_stats, instr_stats
 
