@@ -62,9 +62,11 @@ class BackboneBase(nn.Module):
 
     def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool):
         super().__init__()
-        # for name, parameter in backbone.named_parameters(): # only train later layers # TODO do we want this?
-        #     if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-        #         parameter.requires_grad_(False)
+        # Freeze backbone parameters if training is disabled for the vision model
+        if not train_backbone:
+            for parameter in backbone.parameters():
+                parameter.requires_grad_(False)
+        # Select feature map extraction layers for IntermediateLayerGetter
         if return_interm_layers:
             return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
         else:
@@ -116,7 +118,8 @@ class Joiner(nn.Sequential):
 
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
-    train_backbone = args.lr_backbone > 0
+    freeze_backbone = getattr(args, "freeze_backbone", False)
+    train_backbone = (args.lr_backbone > 0) and (not freeze_backbone)
     return_interm_layers = args.masks
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
     model = Joiner(backbone, position_embedding)
