@@ -46,9 +46,10 @@ class PushCubeTask(control.Task):
         physics.data.qpos[4] = 0.0
         physics.data.qpos[5] = 0.5
 
-        # Randomize cube position within a reachable workspace
-        cube_x = self.random.uniform(0.16, 0.24)
-        cube_y = self.random.uniform(-0.08, 0.08)
+        # Randomize cube position within central spawn region between green and blue targets
+        # Area <= 1.5 * (0.03m * 0.03m cube face) = 13.5 cm^2 (3.67 cm x 3.67 cm box)
+        cube_x = self.random.uniform(0.1816, 0.2184)
+        cube_y = self.random.uniform(-0.0184, 0.0184)
         physics.data.qpos[6:9] = [cube_x, cube_y, 0.015]
         physics.data.qpos[9:13] = [1.0, 0.0, 0.0, 0.0]  # identity quaternion
 
