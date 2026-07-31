@@ -165,6 +165,9 @@ class PushCubeGymEnv(gym.Env):
                 "target_blue_position": spaces.Box(
                     low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
                 ),
+                "wrist_camera": spaces.Box(
+                    low=0, high=255, shape=(96, 96, 3), dtype=np.uint8
+                ),
                 "instruction": spaces.Text(max_length=100),
             }
         )
@@ -172,7 +175,8 @@ class PushCubeGymEnv(gym.Env):
         self._viewer = None
 
     def _get_obs(self, dmc_obs):
-        """Converts raw dm_control task observation arrays to float32 numpy arrays."""
+        """Converts raw dm_control task observation arrays to float32 numpy arrays and renders 96x96x3 wrist camera feed."""
+        wrist_img = self.physics.render(height=96, width=96, camera_id="wrist_camera").copy()
         return {
             "joint_positions": np.array(dmc_obs["joint_positions"], dtype=np.float32),
             "joint_velocities": np.array(dmc_obs["joint_velocities"], dtype=np.float32),
@@ -184,6 +188,7 @@ class PushCubeGymEnv(gym.Env):
             "target_blue_position": np.array(
                 dmc_obs["target_blue_position"], dtype=np.float32
             ),
+            "wrist_camera": wrist_img,
         }
 
     def reset(self, seed=None, options=None):
