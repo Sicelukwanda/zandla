@@ -46,9 +46,10 @@ class PushCubeTask(control.Task):
         physics.data.qpos[4] = 0.0
         physics.data.qpos[5] = 0.5
 
-        # Randomize cube position within a reachable workspace
-        cube_x = self.random.uniform(0.16, 0.24)
-        cube_y = self.random.uniform(-0.08, 0.08)
+        # Randomize cube position within central spawn region between green and blue targets
+        # Area <= 1.5 * (0.03m * 0.03m cube face) = 13.5 cm^2 (3.67 cm x 3.67 cm box)
+        cube_x = self.random.uniform(0.1816, 0.2184)
+        cube_y = self.random.uniform(-0.0184, 0.0184)
         physics.data.qpos[6:9] = [cube_x, cube_y, 0.015]
         physics.data.qpos[9:13] = [1.0, 0.0, 0.0, 0.0]  # identity quaternion
 
@@ -165,6 +166,9 @@ class PushCubeGymEnv(gym.Env):
                 "target_blue_position": spaces.Box(
                     low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
                 ),
+                "wrist_camera": spaces.Box(
+                    low=0, high=255, shape=(96, 96, 3), dtype=np.uint8
+                ),
                 "instruction": spaces.Text(max_length=100),
             }
         )
@@ -172,7 +176,8 @@ class PushCubeGymEnv(gym.Env):
         self._viewer = None
 
     def _get_obs(self, dmc_obs):
-        """Converts raw dm_control task observation arrays to float32 numpy arrays."""
+        """Converts raw dm_control task observation arrays to float32 numpy arrays and renders 96x96x3 wrist camera feed."""
+        wrist_img = self.physics.render(height=96, width=96, camera_id="wrist_camera").copy()
         return {
             "joint_positions": np.array(dmc_obs["joint_positions"], dtype=np.float32),
             "joint_velocities": np.array(dmc_obs["joint_velocities"], dtype=np.float32),
@@ -184,6 +189,7 @@ class PushCubeGymEnv(gym.Env):
             "target_blue_position": np.array(
                 dmc_obs["target_blue_position"], dtype=np.float32
             ),
+            "wrist_camera": wrist_img,
         }
 
     def reset(self, seed=None, options=None):

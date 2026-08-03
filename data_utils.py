@@ -147,9 +147,14 @@ class EpisodicDataset(Dataset):
         traj_path = os.path.join(ep_path, "trajectory.npz")
         traj = np.load(traj_path)
 
-        # Flexible key extraction (actions vs action, qpos vs state)
+        # Flexible key extraction (actions vs action, qpos vs state vs joint_positions)
         action_all = traj['action'] if 'action' in traj else traj['actions']
-        qpos_all = traj['qpos'] if 'qpos' in traj else traj['state']
+        if 'qpos' in traj:
+            qpos_all = traj['qpos']
+        elif 'state' in traj:
+            qpos_all = traj['state']
+        else:
+            qpos_all = traj['joint_positions']
 
         episode_len = action_all.shape[0]
         action_dim = action_all.shape[-1] if action_all.ndim > 1 else 1
@@ -309,7 +314,7 @@ def get_norm_stats(dataset_dir, num_episodes=None):
             info = json.load(f)
         if "stats" in info and "action" in info["stats"]:
             st_key = None
-            for key in ["observation.state", "state", "qpos"]:
+            for key in ["observation.state", "state", "qpos", "joint_positions"]:
                 if key in info["stats"]:
                     st_key = key
                     break
@@ -340,7 +345,12 @@ def get_norm_stats(dataset_dir, num_episodes=None):
         traj_path = os.path.join(dataset_dir, ep_folder, "trajectory.npz")
         if os.path.exists(traj_path):
             traj = np.load(traj_path)
-            qpos = traj['qpos'] if 'qpos' in traj else traj['state']
+            if 'qpos' in traj:
+                qpos = traj['qpos']
+            elif 'state' in traj:
+                qpos = traj['state']
+            else:
+                qpos = traj['joint_positions']
             action = traj['action'] if 'action' in traj else traj['actions']
             all_qpos_data.append(torch.from_numpy(qpos))
             all_action_data.append(torch.from_numpy(action))
