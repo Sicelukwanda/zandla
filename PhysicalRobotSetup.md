@@ -1,5 +1,7 @@
 # Physical Robot Setup & Calibration
 
+![SO-101 Physical Robot Setup](media/physical_robot.png)
+
 This guide details setting up, calibrating, and teleoperating physical SO-101 leader-follower robot arms using the LeRobot framework and Seeed RoboController.
 
 ## Controller SDK

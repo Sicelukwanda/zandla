@@ -41,6 +41,8 @@ The primary simulation environment is `PushCubeGymEnv` ([zandla/envs/push_cube_e
 - **Observations**: Joint positions, joint velocities, end-effector position, green/blue target coordinates, wrist camera images, and natural language task instructions.
 - **Task Goal**: Push the target cube into either the green or blue target zone based on natural language instructions (e.g., *"Push the cube to the green target"*).
 
+![MuJoCo PushCube Environment](media/mujoco_pushcube_env.png)
+
 #### Running the Simulation
 Visualize and interact with the PushCube simulation environment:
 
@@ -118,8 +120,12 @@ uv run python train_nl_act.py \
     --batch_size 64
 ```
 
+![PushT Policy Rollout Evaluation](media/pusht_epoch_11000_eval_ep_1.gif)
+
 ---
 
 ## 🛠️ Physical Robot Setup
+
+![SO-101 Physical Robot Arm Setup](media/physical_robot.png)
 
 For physical hardware configuration, motor calibration, and leader-follower teleoperation using physical SO-101 robot arms, please refer to the **[Physical Robot Setup Guide](PhysicalRobotSetup.md)**.
